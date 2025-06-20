@@ -1,0 +1,16 @@
+version: '3.8'
+
+services:
+  ad-remover-app:
+    build:
+      context: ./app  # 指定 Dockerfile 所在的資料夾
+    env_file:
+      - ./app/.env    # 讀取 .env 檔案，將裡面的變數載入到容器中
+    volumes:
+      # 將主機的 podcast_downloads 資料夾映射到容器內的 /app/podcast_downloads
+      # 這樣下載的檔案才會被保存在你的電腦上，而不是容器裡
+      - ./podcast_downloads:/app/podcast_downloads
+    # 保持標準輸入開啟，這樣我們才能在終端機中與 Python 腳本互動
+    stdin_open: true
+    # 分配一個虛擬終端機
+    tty: true
