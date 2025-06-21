@@ -2,6 +2,7 @@
 requests
 openai
 pydub
+google-generativeai
 
 # 說話人辨識 (需要 PyTorch)
 pyannote.audio
@@ -10,4 +11,3 @@ torchaudio
 
 # 讀取 .env 檔案
 python-dotenv
-google-generativeai
