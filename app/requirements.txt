@@ -10,3 +10,4 @@ torchaudio
 
 # 讀取 .env 檔案
 python-dotenv
+google-generativeai
