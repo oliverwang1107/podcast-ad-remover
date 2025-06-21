@@ -1,70 +1,39 @@
 import os
+import json # ★ 新增：匯入 json 函式庫
 from openai import OpenAI
 from dotenv import load_dotenv
 from pydub import AudioSegment
 
-# ★★★★★★★★★★★★★★★★★★★★★★★★★★★★
-# 如果你的環境變數還是有問題，可以保留這一行作為必殺技
-# 如果環境變數已正常，可以註解或刪掉這一行
+# 如果你的環境變數還是有問題，可以保留這一行
 # AudioSegment.ffmpeg = "C:/ffmpeg/bin/ffmpeg.exe"
-# ★★★★★★★★★★★★★★★★★★★★★★★★★★★★
 
 def compress_audio_if_needed(file_path, target_size_mb=24.5):
-    """
-    檢查音檔大小，如果超過限制，就進行「智慧壓縮」，
-    計算所需位元速率以達到目標大小。
-    """
+    # ... (此函式保持不變) ...
     limit_bytes = target_size_mb * 1024 * 1024
     file_size = os.path.getsize(file_path)
-
     if file_size <= limit_bytes:
-        print(f"✅ 檔案大小 ({file_size / 1024 / 1024:.2f}MB) 未超過 {target_size_mb}MB 限制，無需壓縮。")
         return file_path
-
     print(f"⚠️ 檔案大小 ({file_size / 1024 / 1024:.2f}MB) 超過 {target_size_mb}MB 限制，開始進行智慧壓縮...")
-    
     try:
-        # 讀取音檔以取得資訊
         audio = AudioSegment.from_mp3(file_path)
         duration_in_seconds = len(audio) / 1000.0
-        
-        if duration_in_seconds == 0:
-            print("❌ 錯誤：無法讀取音檔時長，無法計算位元速率。")
-            return None
-
-        # --- 智慧計算位元速率 ---
-        # 目標大小(bytes) * 8 (bits/byte) / 時長(sec) = 目標位元速率(bps)
-        # 再除以 1000 換算成 kbps
+        if duration_in_seconds == 0: return None
         target_bitrate_kbps = (limit_bytes * 8) / duration_in_seconds / 1000
-        
-        # 為了保證最基本的語音清晰度，設定一個最低的位元速率，例如 32k
-        # 如果計算出的值低於 32，我們就用 32k，否則用計算值
         final_bitrate_kbps = max(target_bitrate_kbps, 32)
         bitrate_str = f"{int(final_bitrate_kbps)}k"
-        
-        print(f"🕒 音檔時長: {duration_in_seconds:.2f} 秒")
         print(f"🧮 計算目標位元速率為: {bitrate_str}")
-
-        # 定義壓縮後的新檔名
         original_dir = os.path.dirname(file_path)
         original_filename = os.path.basename(file_path)
         compressed_filename = f"compressed_{original_filename}"
         compressed_path = os.path.join(original_dir, compressed_filename)
-        
-        # 匯出並使用計算出的位元速率
         audio.export(compressed_path, format="mp3", bitrate=bitrate_str)
-        
         new_size = os.path.getsize(compressed_path)
-        print(f"👍 壓縮完成！新檔案：'{compressed_path}' (大小: {new_size / 1024 / 1024:.2f}MB)")
-        
+        print(f"👍 壓縮完成！新檔案大小: {new_size / 1024 / 1024:.2f}MB)")
         return compressed_path
-
     except Exception as e:
         print(f"❌ 壓縮失敗：{e}")
         return None
 
-
-# transcribe_audio_with_api 和 select_audio_file 函式保持不變
 def transcribe_audio_with_api(audio_file_path):
     if not audio_file_path:
         return
@@ -78,7 +47,6 @@ def transcribe_audio_with_api(audio_file_path):
     try:
         load_dotenv()
         client = OpenAI()
-
         print(f"\n🎧 正在上傳並轉錄檔案：'{file_to_upload}'...")
         print("這可能會需要幾分鐘的時間，請稍候...")
 
@@ -87,48 +55,70 @@ def transcribe_audio_with_api(audio_file_path):
                 model="whisper-1", 
                 file=audio_file,
                 response_format="verbose_json",
-                prompt="這是一段台灣的 Podcast 節目，內容可能包含一些台灣用語、人名或地名，例如 PTT、Dcard、股癌、台積電。"
+                prompt="這是一段台灣的 Podcast 節目..."
             )
         
         print("\n🎉 轉錄成功！")
-        print("\n📝【完整逐字稿】")
-        print(transcription['text'])
+        
+        # --- ★★★ 新增：儲存檔案的邏輯 ★★★ ---
+        
+        # 1. 決定儲存的檔名 (跟音檔同名，但副檔名不同)
+        base_filename = os.path.splitext(audio_file_path)[0]
+        txt_path = base_filename + ".txt"
+        json_path = base_filename + ".json"
+
+        # 2. 儲存 .txt 純文字檔
+        with open(txt_path, 'w', encoding='utf-8') as f:
+            f.write(transcription.text)
+        print(f"✅ 完整逐字稿已儲存至：{txt_path}")
+
+        # 3. 準備並儲存 .json 檔案
+        # 將回傳的 segment 物件列表轉換成 Python 的字典列表，才能存成 JSON
+        segments_data = [
+            {
+                "start": seg.start,
+                "end": seg.end,
+                "text": seg.text
+            } for seg in transcription.segments
+        ]
+        
+        with open(json_path, 'w', encoding='utf-8') as f:
+            # json.dump 可以將 Python 字典寫入檔案
+            # ensure_ascii=False 確保中文能正確寫入
+            # indent=4 讓 JSON 檔案格式化，方便閱讀
+            json.dump(segments_data, f, ensure_ascii=False, indent=4)
+        print(f"✅ 附時間戳記的 JSON 檔案已儲存至：{json_path}")
+        
+        # ----------------------------------------------------
+        
+        print("\n📝【完整逐字稿 (預覽)】")
+        print(transcription.text)
         
     except Exception as e:
         print(f"\n❌ 發生錯誤：{e}")
 
+# ... select_audio_file() 和主程式執行區的程式碼保持不變 ...
 def select_audio_file():
+    # ... (此函式保持不變) ...
     base_dir = "podcast_downloads"
-    if not os.path.exists(base_dir) or not os.listdir(base_dir):
-        print(f"❌ 錯誤：找不到 '{base_dir}' 資料夾，或資料夾為空。")
-        return None
+    if not os.path.exists(base_dir) or not os.listdir(base_dir): return None
     podcasts = [d for d in os.listdir(base_dir) if os.path.isdir(os.path.join(base_dir, d))]
-    if not podcasts:
-        print(f"❌ 錯誤：在 '{base_dir}' 中找不到任何節目資料夾。")
-        return None
+    if not podcasts: return None
     print("\n--- 請選擇要處理的 Podcast 節目 ---")
-    for i, podcast_name in enumerate(podcasts):
-        print(f"[{i + 1}] {podcast_name}")
+    for i, podcast_name in enumerate(podcasts): print(f"[{i + 1}] {podcast_name}")
     try:
         choice = int(input("> 請輸入數字選擇節目: "))
         selected_podcast_dir = podcasts[choice - 1]
-    except (ValueError, IndexError):
-        print("❌ 選擇無效。")
-        return None
+    except (ValueError, IndexError): return None
     podcast_path = os.path.join(base_dir, selected_podcast_dir)
     episodes = [f for f in os.listdir(podcast_path) if f.endswith(".mp3")]
-    if not episodes:
-        print(f"❌ 錯誤：在 '{podcast_path}' 中找不到任何 .mp3 檔案。")
-        return None
+    if not episodes: return None
     print(f"\n--- 請選擇 '{selected_podcast_dir}' 的一集 ---")
-    for i, episode_name in enumerate(episodes[:20]):
-        print(f"[{i + 1}] {episode_name}")
+    for i, episode_name in enumerate(episodes[:20]): print(f"[{i + 1}] {episode_name}")
     try:
         choice = int(input("> 請輸入數字選擇檔案: "))
         selected_episode_file = episodes[choice - 1]
-    except (ValueError, IndexError):
-        print("❌ 選擇無效。")
-        return None
+    except (ValueError, IndexError): return None
     return os.path.join(podcast_path, selected_episode_file)
 
 if __name__ == "__main__":
