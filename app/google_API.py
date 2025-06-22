@@ -1,176 +1,134 @@
-#!/usr/bin/env python3
-"""Podcast Ad Segment Detector
-
-This script lets a user pick a downloaded‑podcast transcript (JSON produced by
-Whisper or similar) from the ./podcast_downloads directory and sends the whole
-transcript to Gemini 1.5 Flash via the Google AI Python SDK. The model is asked
-to return a *pure* JSON object listing the start/end of every detected ad block
-plus a short reason.  If no ads are found, it must return {"ads": []}.
-
-Environment variables
----------------------
-GOOGLE_API_KEY  – Your Google AI key (put it in a .env file or export it).
-
-Usage
------
-$ python podcast_ads_detector.py
-
-You will be prompted to pick a show folder and then a .json transcript inside
-that folder.  The result is printed to stdout and also saved alongside the
-transcript with the suffix .ads.json (so you never overwrite the original).
-"""
-
-from __future__ import annotations
-
-import json
 import os
-import sys
-from pathlib import Path
-from typing import Any
-
+import json
 import google.generativeai as genai
 from dotenv import load_dotenv
 
-BASE_DIR = Path("podcast_downloads")
-
-
-# ──────────────────────────────────────────────────────────────────────────────
-# Helper functions
-# ──────────────────────────────────────────────────────────────────────────────
-
-def error(msg: str, *, exit_: bool = False) -> None:
-    """Print a bold red error message."""
-    print(f"\033[91m❌ {msg}\033[0m")
-    if exit_:
-        sys.exit(1)
-
-
-def pick_from_list(options: list[str], title: str) -> str | None:
-    """Simple CLI selector – returns the chosen item or None."""
-    if not options:
-        error(f"在 {title!r} 中沒有可供選擇的項目。")
+def select_json_file():
+    """
+    提供一個互動式選單，讓使用者選擇要分析的 .json 逐字稿檔案。
+    """
+    base_dir = "podcast_downloads"
+    if not os.path.exists(base_dir) or not os.listdir(base_dir):
+        print(f"❌ 錯誤：找不到 '{base_dir}' 資料夾，或資料夾為空。")
         return None
-    print(f"\n--- {title} ---")
-    for idx, opt in enumerate(options, 1):
-        print(f"[{idx}] {opt}")
+    podcasts = [d for d in os.listdir(base_dir) if os.path.isdir(os.path.join(base_dir, d))]
+    if not podcasts:
+        print(f"❌ 錯誤：在 '{base_dir}' 中找不到任何節目資料夾。")
+        return None
+    print("\n--- 請選擇要分析的 Podcast 節目 ---")
+    for i, podcast_name in enumerate(podcasts):
+        print(f"[{i + 1}] {podcast_name}")
     try:
-        choice = int(input("> 請輸入數字選擇: "))
-        return options[choice - 1]
+        choice = int(input("> 請輸入數字選擇節目: "))
+        selected_podcast_dir = podcasts[choice - 1]
     except (ValueError, IndexError):
-        error("選擇無效。")
+        print("❌ 選擇無效。")
         return None
-
-
-def select_json_file() -> Path | None:
-    """Interactive prompt allowing the user to pick the transcript to analyse."""
-    if not BASE_DIR.exists() or not any(BASE_DIR.iterdir()):
-        error(f"找不到 {BASE_DIR} 資料夾，或資料夾為空。", exit_=True)
-
-    podcasts = [d.name for d in BASE_DIR.iterdir() if d.is_dir()]
-    show = pick_from_list(podcasts, "請選擇要分析的 Podcast 節目")
-    if not show:
+    podcast_path = os.path.join(base_dir, selected_podcast_dir)
+    json_files = [f for f in os.listdir(podcast_path) if f.endswith(".json") and not f.endswith(".ads.json")]
+    if not json_files:
+        print(f"❌ 錯誤：在 '{podcast_path}' 中找不到任何可供分析的 .json 逐字稿檔案。")
         return None
-
-    show_path = BASE_DIR / show
-    json_files = [f.name for f in show_path.glob("*.json") if not f.name.endswith(".ads.json")]
-    file_ = pick_from_list(json_files, f"請選擇 '{show}' 的一份逐字稿")
-    if not file_:
-        return None
-
-    return show_path / file_
-
-
-# ──────────────────────────────────────────────────────────────────────────────
-# Core logic: talk to Gemini
-# ──────────────────────────────────────────────────────────────────────────────
-
-def compose_prompt(transcript_text: str) -> str:
-    """Return the full prompt string we send to Gemini."""
-    return f"""
-你是一位專業的 Podcast 分析師，你的唯一任務是根據使用者提供的逐字稿，找出廣告時段，並以純粹的 JSON 格式回傳結果。
-
-你的回覆**必須**是一個 JSON 物件，該物件只有一個名為 \"ads\" 的 key，其 value 是一個陣列。
-陣列中的每個物件都代表一個廣告時段，並包含 'start_time' (秒), 'end_time' (秒), 和 'reason' (簡短原因)。
-如果沒有廣告，\"ads\" 的 value 必須是一個空陣列 []。
-
-### 範例輸出 (EXAMPLE OUTPUT) ###
-```json
-{{
-  \"ads\": [
-    {{
-      \"start_time\": 1.50,
-      \"end_time\": 97.00,
-      \"reason\": \"由 Sharp 贊助，介紹新品家電。\"
-    }}
-  ]
-}}
-```
-
----
-以下是逐字稿，請開始分析：
-```text
-{transcript_text}
-```
-"""
-
-
-def analyse_transcript(path: Path) -> dict[str, Any] | None:
-    """Run Gemini on the transcript and return the parsed JSON (or None)."""
+    print(f"\n--- 請選擇 '{selected_podcast_dir}' 的一份逐字稿 ---")
+    for i, file_name in enumerate(json_files):
+        print(f"[{i + 1}] {file_name}")
     try:
-        segments = json.loads(path.read_text(encoding="utf‑8"))
-        transcript_text = "\n".join(f"[{s['start']:.2f}s - {s['end']:.2f}s] {s['text']}" for s in segments)
-    except (json.JSONDecodeError, KeyError, OSError) as exc:
-        error(f"讀取或解析 JSON 檔案時發生錯誤: {exc}")
+        choice = int(input("> 請輸入數字選擇檔案: "))
+        selected_file = json_files[choice - 1]
+    except (ValueError, IndexError):
+        print("❌ 選擇無效。")
         return None
+    return os.path.join(podcast_path, selected_file)
+
+
+def analyze_transcript_with_google_api(json_transcript_path):
+    """
+    使用 Google AI Studio 的原生 API 來分析逐字稿 JSON 檔案。
+    """
+    if not json_transcript_path:
+        return
+        
+    try:
+        with open(json_transcript_path, 'r', encoding='utf-8') as f:
+            segments = json.load(f)
+        transcript_text = "\n".join([f"[{s['start']:.2f}s - {s['end']:.2f}s] {s['text']}" for s in segments])
+    except Exception as e:
+        print(f"❌ 讀取或解析 JSON 檔案時發生錯誤: {e}")
+        return
 
     load_dotenv()
-    api_key = os.getenv("GOOGLE_API_KEY")
-    if not api_key:
-        error("請在 .env 檔案中設定 GOOGLE_API_KEY", exit_=True)
-
-    genai.configure(api_key=api_key)
-    model = genai.GenerativeModel("gemini-2.0-flash")
-
-    prompt = compose_prompt(transcript_text)
-    print("\n⏳ 正在呼叫 Gemini API... 請稍候。")
-    response = model.generate_content(prompt)
-
-    if not response.text:
-        error("Gemini 回傳空白內容。")
-        return None
+    google_api_key = os.getenv("GOOGLE_API_KEY")
+    if not google_api_key:
+        print("❌ 錯誤：請在 .env 檔案中設定 GOOGLE_API_KEY")
+        return
 
     try:
-        result = json.loads(response.text)
-    except json.JSONDecodeError as exc:
-        error(f"Gemini 回傳結果無法解析為 JSON: {exc}\n原始內容如下:\n{response.text}")
-        return None
+        genai.configure(api_key=google_api_key)
+        model = genai.GenerativeModel("gemini-2.0-flash")
 
-    return result
+        # ★★★ 全新的、更穩健的 Prompt 組合方式 ★★★
+        # 我們將指令拆成一個列表，再用換行符號組合起來，以避免多行字串的語法錯誤。
+        prompt_lines = [
+            '你是一位專業的 Podcast 分析師，你的唯一任務是根據使用者提供的逐字稿，找出廣告時段，並以純粹的 JSON 格式回傳結果。',
+            '',
+            '你的回覆**必須**是一個 JSON 物件，該物件只有一個名為 "ads" 的 key，其 value 是一個陣列。',
+            "陣列中的每個物件都代表一個廣告時段，並包含 'start_time' (秒), 'end_time' (秒), 和 'reason' (簡短原因)。",
+            '如果沒有廣告，"ads" 的 value 必須是一個空陣列 `[]`。',
+            '',
+            '### 範例輸出 (EXAMPLE OUTPUT) ###',
+            '```json',
+            '{',
+            '  "ads": [',
+            '    {',
+            '      "start_time": 1.50,',
+            '      "end_time": 97.00,',
+            '      "reason": "由 Sharp 贊助，介紹新品家電。"',
+            '    }',
+            '  ]',
+            '}',
+            '```',
+            '**重要提醒：絕對不要在你的回覆中包含任何 JSON 以外的文字、解釋或 markdown 格式。你的輸出必須能被直接解析成 JSON。**',
+            '',
+            '--- 逐字稿開始 ---',
+            transcript_text,
+            '--- 逐字稿結束 ---'
+        ]
+        full_prompt = "\n".join(prompt_lines)
+        # ★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★
 
+        print("\n🤖 正在將逐字稿發送給 Google Gemini 進行分析，請稍候...")
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Script entrypoint
-# ──────────────────────────────────────────────────────────────────────────────
+        response = model.generate_content(full_prompt)
+        result_content = response.text
 
-def main() -> None:
-    transcript_path = select_json_file()
-    if not transcript_path:
-        return
+        if result_content.startswith("```json"):
+            result_content = result_content.strip("```json\n").strip("```")
 
-    result = analyse_transcript(transcript_path)
-    if result is None:
-        return
+        print("\n✅ Gemini 分析完成！")
+        print("--- AI 回傳的原始結果 ---")
+        print(result_content)
 
-    print("\n🎉 分析完成，結果如下:\n")
-    print(json.dumps(result, ensure_ascii=False, indent=2))
-
-    out_path = transcript_path.with_suffix(".ads.json")
-    out_path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf‑8")
-    print(f"\n💾 已將結果儲存至 {out_path.relative_to(Path.cwd())}")
-
+        ad_segments_obj = json.loads(result_content)
+        base_filename = os.path.splitext(json_transcript_path)[0]
+        output_json_path = base_filename + ".analysis.json"
+        with open(output_json_path, 'w', encoding='utf-8') as f:
+            json.dump(ad_segments_obj, f, ensure_ascii=False, indent=4)
+        print(f"\n💾 AI 分析結果已儲存至：{output_json_path}")
+        
+        ad_segments = ad_segments_obj.get('ads', [])
+        print("\n--- 解析後的廣告時段 ---")
+        if ad_segments:
+            for ad in ad_segments:
+                print(f"發現廣告：從 {ad.get('start_time', 'N/A')} 秒 到 {ad.get('end_time', 'N/A')} 秒，原因：{ad.get('reason', 'N/A')}")
+        else:
+            print("分析結果為：未發現廣告。")
+            
+    except json.JSONDecodeError:
+        print("\n⚠️ 警告：AI 回傳的內容不是有效的 JSON 格式。")
+    except Exception as e:
+        print(f"❌ 呼叫 Google AI API 時發生錯誤: {e}")
 
 if __name__ == "__main__":
-    try:
-        main()
-    except KeyboardInterrupt:
-        print("\n👋 已取消。再見！")
+    selected_json_file = select_json_file()
+    if selected_json_file:
+        analyze_transcript_with_google_api(selected_json_file)
