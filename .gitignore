@@ -84,3 +84,17 @@ Thumbs.db
 # --- Docker ---
 # 有時 docker-compose 會產生本地檔案，通常不需要追蹤
 docker-compose.override.yml
+
+# --- Frontend (Vite / React) ---
+
+# Vite build output directory
+# (雖然全域的 build/ 已被忽略，但更明確的規則更好)
+/frontend/dist
+
+# Vite's cache directory
+/frontend/.vite/
+
+# Local environment variables that should not be committed
+# (雖然全域的 *.env.* 已涵蓋，但明確寫出有好處)
+/frontend/.env.local
+/frontend/.env.*.local
