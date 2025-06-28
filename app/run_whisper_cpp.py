@@ -1,6 +1,7 @@
 import os
 import subprocess
 import time
+import json
 
 def select_mp3_file():
     """
@@ -112,7 +113,30 @@ def transcribe_with_whisper_cpp(audio_path, model_size):
         print("\n" + "*"*50)
         print("🎉🎉🎉 轉錄成功！ 🎉🎉🎉")
         print(f"總耗時: {end_time - start_time:.2f} 秒")
-        print(f"💾 附時間戳記的 JSON 檔案已儲存至: {output_json_path}")
+        print(f"💾 原始 JSON 檔案已儲存至: {output_json_path}")
+        
+        # ★★★ 新增：轉換與清理 JSON 格式的步驟 ★★★
+        print("✨ 正在將逐字稿轉換為標準格式...")
+        with open(output_json_path, 'r', encoding='utf-8') as f:
+            original_data = json.load(f)
+
+        standard_segments = []
+        for segment in original_data.get('transcription', []):
+            start_ms = segment.get('offsets', {}).get('from', 0)
+            end_ms = segment.get('offsets', {}).get('to', 0)
+            text = segment.get('text', '').strip()
+            standard_segments.append({
+                "start_time": start_ms / 1000.0,
+                "end_time": end_ms / 1000.0,
+                "text": text
+            })
+        
+        standard_output = {"transcription": standard_segments}
+
+        with open(output_json_path, 'w', encoding='utf-8') as f:
+            json.dump(standard_output, f, ensure_ascii=False, indent=2)
+        
+        print("✅ 標準化完成！檔案已更新。")
         print("*"*50)
 
     except FileNotFoundError:
